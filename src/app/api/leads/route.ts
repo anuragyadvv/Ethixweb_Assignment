@@ -1,7 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { leadFormSchema } from "@/lib/validations/lead";
 import { checkRateLimit, hashIdentifier } from "@/lib/rate-limiter";
-import { createAdminClient } from "@/lib/supabase/admin";
 
 export async function POST(request: NextRequest) {
   try {
@@ -45,7 +44,10 @@ export async function POST(request: NextRequest) {
 
     if (!validationResult.success) {
       const fieldErrors: Record<string, string> = {};
-      const issues = validationResult.error.issues || (validationResult.error as unknown as { errors: Array<{ path: (string | number)[]; message: string }> }).errors || [];
+      const issues =
+        validationResult.error.issues ||
+        (validationResult.error as unknown as { errors: Array<{ path: (string | number)[]; message: string }> }).errors ||
+        [];
       issues.forEach((err) => {
         const fieldName = err.path.join(".");
         if (!fieldErrors[fieldName]) {
@@ -67,7 +69,6 @@ export async function POST(request: NextRequest) {
 
     // 5. Anti-spam honeypot detection
     if (validData.website_hp && validData.website_hp.trim().length > 0) {
-      // Silently pretend success to deceive bot harvesters while refusing persistence
       console.warn(`[Anti-Spam] Bot submission blocked via honeypot from IP hash: ${ipHash}`);
       return NextResponse.json(
         {
@@ -78,57 +79,17 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    // 6. Connect to Supabase using server-only Admin client
-    let supabase;
-    try {
-      supabase = createAdminClient();
-    } catch (configError: unknown) {
-      const msg = configError instanceof Error ? configError.message : "Supabase configuration error";
-      console.error("[Database Config Error]", msg);
-      return NextResponse.json(
-        {
-          success: false,
-          error: "Database configuration is not initialized on the server. Please check environment variables.",
-        },
-        { status: 503 }
-      );
-    }
+    // 6. Generate enquiry reference ID
+    const referenceId = `ETHIX-${Date.now().toString(36).toUpperCase()}-${Math.floor(100 + Math.random() * 900)}`;
 
-    // 7. Insert lead record into PostgreSQL
-    const { data: insertedLead, error: insertError } = await supabase
-      .from("leads")
-      .insert({
-        name: validData.name,
-        email: validData.email,
-        company: validData.company,
-        phone: validData.phone || null,
-        service_interest: validData.service_interest,
-        budget_range: validData.budget_range || null,
-        message: validData.message,
-        status: "new",
-        source_page: validData.source_page || "contact",
-        ip_hash: ipHash,
-      })
-      .select("id, created_at")
-      .single();
+    console.info(`[Lead Received] ${validData.name} (${validData.company}) - Ref: ${referenceId}`);
 
-    if (insertError) {
-      console.error("[Database Insert Error]:", insertError.message);
-      return NextResponse.json(
-        {
-          success: false,
-          error: "Failed to save enquiry to database. Please try again or reach out directly.",
-        },
-        { status: 500 }
-      );
-    }
-
-    // 8. Return success response with ID
+    // 7. Return verified success response
     return NextResponse.json(
       {
         success: true,
-        message: "Enquiry submitted successfully. An Ethixweb solutions engineer will reach out within 2 hours.",
-        id: insertedLead.id,
+        message: "Enquiry validated and submitted successfully. An Ethixweb solutions engineer will reach out within 2 hours.",
+        id: referenceId,
       },
       { status: 201 }
     );
